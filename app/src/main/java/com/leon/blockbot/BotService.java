@@ -712,6 +712,29 @@ public class BotService extends AccessibilityService {
         return new float[]{bx, by};
     }
 
+    /** Смотрим на висящую фигуру, пока она не перестанет двигаться (или ~0.5 с). */
+    private float[] waitSettled(CaptureService cap, int[] base, Piece p, float ex, float ey, boolean[] settled) {
+        long t0 = System.currentTimeMillis();
+        float[] prev = null;
+        float tol = Math.max(2f, cfg.cell * 0.04f);
+        while (System.currentTimeMillis() - t0 < 550) {
+            sleep(30);
+            Frame f = freshFrame(cap, cap.currentSeq());
+            if (f == null) return prev;
+            float[] got = locateHeld(f, base, p, prev != null ? prev[0] : ex, prev != null ? prev[1] : ey);
+            if (got == null) {
+                if (prev != null) return prev;
+                continue;
+            }
+            if (prev != null && Math.abs(got[0] - prev[0]) <= tol && Math.abs(got[1] - prev[1]) <= tol) {
+                settled[0] = true;
+                return got;
+            }
+            prev = got;
+        }
+        return prev;
+    }
+
     /**
      * Берёт фигуру, ведёт к цели, смотрит где она висит и подруливает, потом отпускает.
      * 0 = не получилось, 1 = поставил без проверки, 2 = поставил и проверил прицел.
@@ -736,25 +759,26 @@ public class BotService extends AccessibilityService {
                 return 0;
             }
             float lastX = fx, lastY = fy;
-            for (int iter = 0; iter < 3; iter++) {
-                sleep(Math.max(70, 160 / sp));
-                Frame f = freshFrame(cap, cap.currentSeq());
-                if (f == null) break;
+            for (int iter = 0; iter < 5; iter++) {
                 float ex = p.cx + cfg.kx * (lastX - p.cx) + cfg.bx;
                 float ey = p.cy + cfg.ky * (lastY - p.cy) + cfg.by;
-                float[] got = locateHeld(f, base, p, ex, ey);
+                boolean[] settled = {false};
+                float[] got = waitSettled(cap, base, p, ex, ey, settled);
                 if (got == null) break;
-                // учимся: подъём уточняем по тому, где фигура реально висит
-                cfg.bx += (got[0] - ex) * 0.6f;
-                cfg.by += (got[1] - ey) * 0.6f;
+                // учимся только когда фигура остановилась (она догоняет палец с задержкой)
+                if (settled[0]) {
+                    cfg.bx += (got[0] - ex) * 0.5f;
+                    cfg.by += (got[1] - ey) * 0.5f;
+                }
                 float errX = tx - got[0], errY = ty - got[1];
-                if (Math.abs(errX) < cfg.cell * 0.18f && Math.abs(errY) < cfg.cell * 0.18f) {
+                if (settled[0] && Math.abs(errX) < cfg.cell * 0.18f && Math.abs(errY) < cfg.cell * 0.18f) {
                     verified = true;
                     break;
                 }
+                if (!settled[0]) continue; // ещё едет — подождём ещё
                 float nx = Math.max(1, Math.min(W - 2, lastX + errX / cfg.kx));
                 float ny = Math.max(1, Math.min(H - 2, lastY + errY / cfg.ky));
-                if (!strokeTo(cur, lastX, lastY, nx, ny, Math.max(30, 120 / sp), true)) break;
+                if (!strokeTo(cur, lastX, lastY, nx, ny, Math.max(30, 100 / sp), true)) break;
                 lastX = nx;
                 lastY = ny;
             }
