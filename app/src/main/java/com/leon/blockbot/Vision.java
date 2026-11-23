@@ -167,11 +167,12 @@ final class Vision {
 
         float lo, hi;
         if (c.trayCell > 0) {
-            lo = c.trayCell * 0.9f;
-            hi = c.trayCell * 1.1f;
+            lo = c.trayCell * 0.92f;
+            hi = c.trayCell * 1.08f;
         } else {
-            lo = c.cell * 0.3f;
-            hi = c.cell * 1.05f;
+            // в Block Blast клетка в лотке ≈ 0.44 клетки поля
+            lo = c.cell * 0.37f;
+            hi = c.cell * 0.53f;
         }
         float stepS = Math.max(0.2f, c.cell * 0.004f);
         int nSteps = (int) ((hi - lo) / stepS) + 1;
@@ -202,9 +203,9 @@ final class Vision {
             }
         }
         // учимся, если уверены
-        if (c.trayCell == 0 && list.size() == 3 && bestErr / list.size() < 0.2f) {
+        if (c.trayCell == 0 && bestErr / list.size() < 0.15f) {
             c.trayCell = bestS;
-        } else if (c.trayCell > 0 && bestErr / list.size() < 0.2f) {
+        } else if (c.trayCell > 0 && bestErr / list.size() < 0.15f) {
             c.trayCell = c.trayCell * 0.9f + bestS * 0.1f;
         }
         return bestS;
@@ -250,7 +251,6 @@ final class Vision {
         p.pattern = np;
         p.cx = bx[0] + (minC + p.cols / 2f) * cw;
         p.cy = bx[1] + (minR + p.rows / 2f) * ch;
-        if (!connected(np)) return null;
         return p;
     }
 

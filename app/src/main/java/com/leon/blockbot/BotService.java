@@ -261,7 +261,7 @@ public class BotService extends AccessibilityService {
         cfg.y0 = a[1];
         cfg.cell = cell;
         cfg.trayTop = b[1] + cell * 0.7f;
-        cfg.trayBottom = Math.max(cfg.trayTop + cell, t[1]);
+        cfg.trayBottom = Math.min(dm.heightPixels - 1, Math.max(b[1] + cell * 4.3f, t[1]));
         cfg.trayLeft = Math.max(0, a[0] - cell);
         cfg.trayRight = Math.min(dm.widthPixels - 1, b[0] + cell);
         cfg.emptyRef = -1;
