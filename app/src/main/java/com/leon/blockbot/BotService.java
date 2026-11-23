@@ -175,6 +175,7 @@ public class BotService extends AccessibilityService {
                         try { wm.updateViewLayout(panel, panelLp); } catch (Exception ignored) { }
                         return true;
                     case MotionEvent.ACTION_UP:
+                        updatePanelRect();
                         cfg.panelX = panelLp.x;
                         cfg.panelY = panelLp.y;
                         cfg.save(BotService.this);
@@ -185,6 +186,43 @@ public class BotService extends AccessibilityService {
         });
 
         wm.addView(panel, panelLp);
+        panel.getViewTreeObserver().addOnGlobalLayoutListener(this::updatePanelRect);
+    }
+
+    // прямоугольник панели на экране (чтобы не путать её с фигурами)
+    private volatile int[] panelRect = {0, 0, 0, 0};
+
+    private void updatePanelRect() {
+        if (panel == null || panel.getVisibility() != View.VISIBLE) {
+            panelRect = new int[]{0, 0, 0, 0};
+            return;
+        }
+        int[] loc = new int[2];
+        panel.getLocationOnScreen(loc);
+        panelRect = new int[]{loc[0] - 4, loc[1] - 4, loc[0] + panel.getWidth() + 4, loc[1] + panel.getHeight() + 4};
+    }
+
+    boolean inPanel(int x, int y) {
+        int[] r = panelRect;
+        return x >= r[0] && x < r[2] && y >= r[1] && y < r[3];
+    }
+
+    /** Пока бот двигает фигуру, панель пропускает касания насквозь (и прозрачна, если hide). */
+    private void panelPassThrough(boolean on, boolean hide) {
+        final CountDownLatch latch = new CountDownLatch(1);
+        main.post(() -> {
+            try {
+                if (panel != null) {
+                    if (on) panelLp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                    else panelLp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                    panel.setAlpha(on && hide ? 0f : 1f);
+                    wm.updateViewLayout(panel, panelLp);
+                    updatePanelRect();
+                }
+            } catch (Exception ignored) { }
+            latch.countDown();
+        });
+        try { latch.await(1, TimeUnit.SECONDS); } catch (InterruptedException ignored) { }
     }
 
     private void status(String s) {
@@ -324,6 +362,7 @@ public class BotService extends AccessibilityService {
         Piece pendingPiece = null;
         int pr = 0, pc = 0;
         int probeIdx = 0, misses = 0, measureFails = 0;
+        boolean lastVerified = false;
         long minSeq = 0;
         int moves = 0;
 
@@ -363,7 +402,7 @@ public class BotService extends AccessibilityService {
                         cfg.kx = 1; cfg.ky = 1; cfg.bx = 0;
                         cfg.by = PROBES[probeIdx] * cfg.cell;
                     }
-                } else {
+                } else if (!lastVerified) {
                     int[] err = landingError(pendingBoard, st.board, pendingPiece, pr, pc);
                     if (err != null) {
                         misses = 0;
@@ -421,9 +460,14 @@ public class BotService extends AccessibilityService {
                     + (st.uncertain > 0 ? " · неуверенных клеток: " + st.uncertain : ""));
 
             int sp = speed();
-            boolean ok = drag(p.cx, p.cy, fx, fy,
-                    Math.max(20, 120 / sp), Math.max(40, 380 / sp), Math.max(20, 90 / sp));
+            int res = place(cap, p, tx, ty, fx, fy, sp);
+            boolean ok = res > 0;
             minSeq = cap.currentSeq();
+            if (res == 2) {
+                cfg.offKnown = true;
+                misses = 0;
+            }
+            lastVerified = res == 2;
             if (ok) {
                 hasPending = true;
                 pendingBoard = st.board;
@@ -493,6 +537,7 @@ public class BotService extends AccessibilityService {
         int minX = Integer.MAX_VALUE, maxX = -1, maxY = -1, count = 0;
         for (int y = yTop; y < f.h; y += 2) {
             for (int x = 0; x < f.w; x += 2) {
+                if (inPanel(x, y)) continue;
                 int now = f.get(x, y);
                 int was = base[(y - yTop) * f.w + x];
                 if (Vision.dist(now, was) > 60 && Vision.isTrayBlock(now)) {
@@ -534,6 +579,13 @@ public class BotService extends AccessibilityService {
         float f3x = f2x, f3y = fy0 - d;
         GestureDescription.StrokeDescription[] cur = {null};
         float[] c1 = null, c2 = null, c3 = null;
+        panelPassThrough(true, true);
+        sleep(120);
+        f0 = freshFrame(cap, cap.currentSeq());
+        if (f0 == null) { panelPassThrough(false, false); return false; }
+        for (int y = yTop; y < H; y++)
+            for (int x = 0; x < W; x += 2)
+                base[(y - yTop) * W + x] = f0.get(x, y);
         try {
             if (!strokeTo(cur, p.cx, p.cy, p.cx + 1, p.cy, 150, true)) return false;
             if (!strokeTo(cur, p.cx + 1, p.cy, f1x, f1y, 250, true)) return false;
@@ -555,8 +607,10 @@ public class BotService extends AccessibilityService {
                 strokeTo(cur, p.cx, p.cy, p.cx + 1, p.cy, 60, false);
             }
         } catch (Exception e) {
+            panelPassThrough(false, false);
             return false;
         }
+        panelPassThrough(false, false);
         float kx = 1f, ky = 1f;
         if (c1 != null && c2 != null) kx = (c2[0] - c1[0]) / (f2x - f1x);
         if (c2 != null && c3 != null) ky = (c3[1] - c2[1]) / (f3y - f2y);
@@ -574,6 +628,144 @@ public class BotService extends AccessibilityService {
         cfg.bx = liftX;
         cfg.by = liftY;
         return true;
+    }
+
+    // ================= точная постановка с обратной связью =================
+
+    private int[] snapBase(Frame f) {
+        int w2 = f.w / 2, h2 = f.h / 2;
+        int[] b = new int[w2 * h2];
+        for (int y = 0; y < h2; y++)
+            for (int x = 0; x < w2; x++)
+                b[y * w2 + x] = f.get(x * 2, y * 2);
+        return b;
+    }
+
+    /** Пиксель «стал ярким блоком» по сравнению с кадром до хода. */
+    private boolean changedBlock(Frame f, int[] base, int x, int y) {
+        if (x < 0 || y < 0 || x >= f.w || y >= f.h) return false;
+        int w2 = f.w / 2;
+        int bx = Math.min(x / 2, w2 - 1), by = Math.min(y / 2, f.h / 2 - 1);
+        int now = f.get(x, y);
+        int was = base[by * w2 + bx];
+        return Vision.dist(now, was) > 70 && Vision.val(now) > 120;
+    }
+
+    /** Ищем висящую под пальцем фигуру около ожидаемого места (ex, ey). Возвращает центр или null. */
+    private float[] locateHeld(Frame f, int[] base, Piece p, float ex, float ey) {
+        float cs = cfg.cell;
+        // точки внутри клеток фигуры и в соседних пустых клетках
+        List<float[]> in = new ArrayList<>(), out = new ArrayList<>();
+        float[] offs = {-0.28f, 0f, 0.28f};
+        for (int r = -1; r <= p.rows; r++) {
+            for (int c = -1; c <= p.cols; c++) {
+                boolean filled = r >= 0 && c >= 0 && r < p.rows && c < p.cols
+                        && (p.pattern & (1L << (r * 8 + c))) != 0;
+                boolean nearFilled = false;
+                if (!filled) {
+                    for (int dr = -1; dr <= 1 && !nearFilled; dr++)
+                        for (int dc = -1; dc <= 1; dc++) {
+                            if (Math.abs(dr) + Math.abs(dc) != 1) continue;
+                            int rr = r + dr, cc = c + dc;
+                            if (rr >= 0 && cc >= 0 && rr < p.rows && cc < p.cols
+                                    && (p.pattern & (1L << (rr * 8 + cc))) != 0) { nearFilled = true; break; }
+                        }
+                    if (!nearFilled) continue;
+                }
+                float cx = (c - (p.cols - 1) / 2f) * cs, cy = (r - (p.rows - 1) / 2f) * cs;
+                for (float oy : offs) for (float ox : offs) {
+                    float[] pt = {cx + ox * cs, cy + oy * cs};
+                    if (filled) in.add(pt); else out.add(pt);
+                }
+            }
+        }
+        float range = cs * 1.3f;
+        float step = Math.max(2f, cs / 16f);
+        float bestScore = -1e9f, bx = ex, by = ey, bestIn = 0;
+        for (int pass = 0; pass < 2; pass++) {
+        float cx0 = pass == 0 ? ex : bx, cy0 = pass == 0 ? ey : by;
+        float rg = pass == 0 ? range : step, st = pass == 0 ? step : 1f;
+        for (float dy = -rg; dy <= rg; dy += st) {
+            for (float dx = -rg; dx <= rg; dx += st) {
+                float px = cx0 + dx, py = cy0 + dy;
+                int hi = 0, ni = 0, ho = 0, no = 0;
+                for (float[] pt : in) {
+                    int x = Math.round(px + pt[0]), y = Math.round(py + pt[1]);
+                    if (inPanel(x, y)) continue;
+                    ni++;
+                    if (changedBlock(f, base, x, y)) hi++;
+                }
+                for (float[] pt : out) {
+                    int x = Math.round(px + pt[0]), y = Math.round(py + pt[1]);
+                    if (inPanel(x, y)) continue;
+                    no++;
+                    if (changedBlock(f, base, x, y)) ho++;
+                }
+                if (ni == 0) continue;
+                float fi = hi / (float) ni, fo = no == 0 ? 0 : ho / (float) no;
+                float sc = fi - fo;
+                if (sc > bestScore) { bestScore = sc; bx = px; by = py; bestIn = fi; }
+            }
+        }
+        }
+        if (bestIn < 0.7f || bestScore < 0.45f) return null;
+        return new float[]{bx, by};
+    }
+
+    /**
+     * Берёт фигуру, ведёт к цели, смотрит где она висит и подруливает, потом отпускает.
+     * 0 = не получилось, 1 = поставил без проверки, 2 = поставил и проверил прицел.
+     */
+    private int place(CaptureService cap, Piece p, float tx, float ty, float fx, float fy, int sp) {
+        Frame f0 = cap.grab();
+        if (f0 == null) return 0;
+        int[] base = snapBase(f0);
+        float W = f0.w, H = f0.h;
+        fx = Math.max(1, Math.min(W - 2, fx));
+        fy = Math.max(1, Math.min(H - 2, fy));
+        GestureDescription.StrokeDescription[] cur = {null};
+        boolean verified = false;
+        panelPassThrough(true, false);
+        try {
+            if (!strokeTo(cur, p.cx, p.cy, p.cx + 1, p.cy, Math.max(20, 110 / sp), true)) {
+                panelPassThrough(false, false);
+                return drag(p.cx, p.cy, fx, fy, Math.max(20, 120 / sp), Math.max(40, 380 / sp), Math.max(20, 90 / sp)) ? 1 : 0;
+            }
+            if (!strokeTo(cur, p.cx + 1, p.cy, fx, fy, Math.max(40, 330 / sp), true)) {
+                panelPassThrough(false, false);
+                return 0;
+            }
+            float lastX = fx, lastY = fy;
+            for (int iter = 0; iter < 3; iter++) {
+                sleep(Math.max(70, 160 / sp));
+                Frame f = freshFrame(cap, cap.currentSeq());
+                if (f == null) break;
+                float ex = p.cx + cfg.kx * (lastX - p.cx) + cfg.bx;
+                float ey = p.cy + cfg.ky * (lastY - p.cy) + cfg.by;
+                float[] got = locateHeld(f, base, p, ex, ey);
+                if (got == null) break;
+                // учимся: подъём уточняем по тому, где фигура реально висит
+                cfg.bx += (got[0] - ex) * 0.6f;
+                cfg.by += (got[1] - ey) * 0.6f;
+                float errX = tx - got[0], errY = ty - got[1];
+                if (Math.abs(errX) < cfg.cell * 0.18f && Math.abs(errY) < cfg.cell * 0.18f) {
+                    verified = true;
+                    break;
+                }
+                float nx = Math.max(1, Math.min(W - 2, lastX + errX / cfg.kx));
+                float ny = Math.max(1, Math.min(H - 2, lastY + errY / cfg.ky));
+                if (!strokeTo(cur, lastX, lastY, nx, ny, Math.max(30, 120 / sp), true)) break;
+                lastX = nx;
+                lastY = ny;
+            }
+            strokeTo(cur, lastX, lastY, lastX + 1, lastY, Math.max(20, 60 / sp), false);
+        } catch (Exception e) {
+            panelPassThrough(false, false);
+            return 0;
+        }
+        panelPassThrough(false, false);
+        if (verified) cfg.save(this);
+        return verified ? 2 : 1;
     }
 
     // ================= жесты =================
