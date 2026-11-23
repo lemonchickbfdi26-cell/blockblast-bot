@@ -71,7 +71,12 @@ final class Vision {
     private static int bgV;
 
     private static boolean block(int p) {
-        return dist(p, bg) > 90 && val(p) > bgV + 40;
+        return dist(p, bg) > 60 && val(p) > bgV + 20;
+    }
+
+    /** Похож ли пиксель на блок фигуры (по фону лотка из последнего чтения). */
+    static boolean isTrayBlock(int p) {
+        return bg != 0 && block(p);
     }
 
     private static boolean colHas(Frame f, int x, int y0, int y1) {
@@ -104,7 +109,19 @@ final class Vision {
         }
         int best = 0;
         for (int i = 1; i < 4096; i++) if (hist[i] > hist[best]) best = i;
-        bg = ((((best >> 8) & 15) * 16 + 8) << 16) | ((((best >> 4) & 15) * 16 + 8) << 8) | ((best & 15) * 16 + 8);
+        // средний цвет пикселей самого частого оттенка
+        long sr = 0, sg = 0, sb = 0, n = 0;
+        for (int y = T; y <= B; y += step * 2) {
+            for (int x = L; x <= R; x += step * 2) {
+                int p = f.get(x, y);
+                if ((((r(p) >> 4) << 8) | ((g(p) >> 4) << 4) | (b(p) >> 4)) == best) {
+                    sr += r(p); sg += g(p); sb += b(p); n++;
+                }
+            }
+        }
+        if (n == 0) n = 1;
+        bg = (int) (((sr / n) << 16) | ((sg / n) << 8) | (sb / n));
+        if (bg == 0) bg = 1;
         bgV = val(bg);
 
         // рамки фигур в каждом из трёх слотов

@@ -10,8 +10,10 @@ final class Config {
     // зона с тремя фигурами внизу
     float trayTop, trayBottom, trayLeft, trayRight;
     // где фигура оказывается относительно пальца при перетаскивании (в клетках поля)
-    float offX = 0f, offY = -2f;
-    boolean offKnown = false;
+    // как фигура едет за пальцем: piece = k * finger + b (в пикселях)
+    float kx = 1f, ky = 1f, bx = 0f, by = 0f;
+    boolean dragMeasured = false; // замерено, держа фигуру
+    boolean offKnown = false;     // подтверждено по реально поставленной фигуре
     // размер клетки у маленьких фигур в лотке (в пикселях), 0 = ещё не выучен
     float trayCell = 0f;
     int speedIdx = 0;
@@ -34,9 +36,12 @@ final class Config {
         c.trayBottom = p.getFloat("trayBottom", 0f);
         c.trayLeft = p.getFloat("trayLeft", 0f);
         c.trayRight = p.getFloat("trayRight", 0f);
-        c.offX = p.getFloat("offX", 0f);
-        c.offY = p.getFloat("offY", -2f);
-        c.offKnown = p.getBoolean("offKnown", false);
+        c.kx = p.getFloat("kx", 1f);
+        c.ky = p.getFloat("ky", 1f);
+        c.bx = p.getFloat("bx", 0f);
+        c.by = p.getFloat("by", 0f);
+        c.dragMeasured = p.getBoolean("dragMeasured2", false);
+        c.offKnown = p.getBoolean("offKnown2", false);
         c.trayCell = p.getFloat("trayCell", 0f);
         c.speedIdx = p.getInt("speedIdx", 0);
         c.panelX = p.getInt("panelX", 20);
@@ -49,7 +54,8 @@ final class Config {
                 .putFloat("x0", x0).putFloat("y0", y0).putFloat("cell", cell)
                 .putFloat("trayTop", trayTop).putFloat("trayBottom", trayBottom)
                 .putFloat("trayLeft", trayLeft).putFloat("trayRight", trayRight)
-                .putFloat("offX", offX).putFloat("offY", offY).putBoolean("offKnown", offKnown)
+                .putFloat("kx", kx).putFloat("ky", ky).putFloat("bx", bx).putFloat("by", by)
+                .putBoolean("dragMeasured2", dragMeasured).putBoolean("offKnown2", offKnown)
                 .putFloat("trayCell", trayCell)
                 .putInt("speedIdx", speedIdx)
                 .putInt("panelX", panelX).putInt("panelY", panelY)

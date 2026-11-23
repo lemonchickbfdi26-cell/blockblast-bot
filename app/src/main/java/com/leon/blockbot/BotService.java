@@ -266,6 +266,8 @@ public class BotService extends AccessibilityService {
         cfg.trayRight = Math.min(dm.widthPixels - 1, b[0] + cell);
         cfg.emptyRef = -1;
         cfg.trayCell = 0;
+        cfg.dragMeasured = false;
+        cfg.offKnown = false;
         cfg.save(this);
         status("Калибровка сохранена ✔ Жми ▶");
     }
@@ -321,7 +323,7 @@ public class BotService extends AccessibilityService {
         long pendingBoard = 0;
         Piece pendingPiece = null;
         int pr = 0, pc = 0;
-        int probeIdx = 0, misses = 0;
+        int probeIdx = 0, misses = 0, measureFails = 0;
         long minSeq = 0;
         int moves = 0;
 
@@ -353,34 +355,41 @@ public class BotService extends AccessibilityService {
                 hasPending = false;
                 if (st.board == pendingBoard) {
                     misses++;
-                    if (!cfg.offKnown) {
-                        probeIdx = (probeIdx + 1) % PROBES.length;
-                        cfg.offX = 0;
-                        cfg.offY = PROBES[probeIdx];
-                    } else if (misses >= 3) {
-                        cfg.offKnown = false;
-                        probeIdx = 0;
+                    if (cfg.dragMeasured && misses >= 2) {
+                        cfg.dragMeasured = false; // перемерим
                         misses = 0;
+                    } else if (!cfg.dragMeasured) {
+                        probeIdx = (probeIdx + 1) % PROBES.length;
+                        cfg.kx = 1; cfg.ky = 1; cfg.bx = 0;
+                        cfg.by = PROBES[probeIdx] * cfg.cell;
                     }
                 } else {
-                    int bestD = Integer.MAX_VALUE, br = 0, bc = 0;
-                    for (int r = 0; r + pendingPiece.rows <= 8; r++) {
-                        for (int c = 0; c + pendingPiece.cols <= 8; c++) {
-                            if (!Solver.fits(pendingBoard, pendingPiece.pattern, pendingPiece.rows, pendingPiece.cols, r, c))
-                                continue;
-                            if (Solver.place(pendingBoard, pendingPiece.pattern, r, c) != st.board) continue;
-                            int d = Math.abs(r - pr) + Math.abs(c - pc);
-                            if (d < bestD) { bestD = d; br = r; bc = c; }
-                        }
-                    }
-                    if (bestD != Integer.MAX_VALUE) {
+                    int[] err = landingError(pendingBoard, st.board, pendingPiece, pr, pc);
+                    if (err != null) {
                         misses = 0;
-                        cfg.offY += (br - pr);
-                        cfg.offX += (bc - pc);
+                        cfg.by += err[0] * cfg.cell;
+                        cfg.bx += err[1] * cfg.cell;
                         cfg.offKnown = true;
                         cfg.save(this);
                     }
                 }
+            }
+
+            if (!cfg.dragMeasured && measureFails < 2) {
+                status("Замеряю, как игра двигает фигуру…");
+                if (measureDrag(cap, st)) {
+                    measureFails = 0;
+                    cfg.dragMeasured = true;
+                    cfg.offKnown = false;
+                    cfg.save(this);
+                } else {
+                    measureFails++;
+                    cfg.kx = 1; cfg.ky = 1; cfg.bx = 0;
+                    cfg.by = PROBES[probeIdx] * cfg.cell;
+                }
+                minSeq = cap.currentSeq();
+                sleep(400);
+                continue;
             }
 
             List<Piece> ps = new ArrayList<>();
@@ -400,11 +409,11 @@ public class BotService extends AccessibilityService {
             Piece p = ps.get(m.idx);
             float tx = cfg.x0 + (m.c + (p.cols - 1) / 2f) * cfg.cell;
             float ty = cfg.y0 + (m.r + (p.rows - 1) / 2f) * cfg.cell;
-            float fx = tx - cfg.offX * cfg.cell;
-            float fy = ty - cfg.offY * cfg.cell;
+            float fx = (tx - cfg.bx) / cfg.kx;
+            float fy = (ty - cfg.by) / cfg.ky;
 
             moves++;
-            status((cfg.offKnown ? "Ход " + moves : "Пристреливаюсь… (смещение " + cfg.offY + ")")
+            status((cfg.offKnown ? "Ход " + moves : "Пристреливаюсь…")
                     + " · " + speed() + "x"
                     + (st.uncertain > 0 ? " · неуверенных клеток: " + st.uncertain : ""));
 
@@ -422,6 +431,134 @@ public class BotService extends AccessibilityService {
             sleep(Math.max(60, 650 / sp));
         }
         main.post(() -> { if (playBtn != null) playBtn.setText("▶"); });
+    }
+
+    /** Где реально встала фигура относительно задуманного места (dr, dc), или null. */
+    private static int[] landingError(long prev, long now, Piece p, int pr, int pc) {
+        int bestD = Integer.MAX_VALUE, br = 0, bc = 0;
+        for (int r = 0; r + p.rows <= 8; r++) {
+            for (int c = 0; c + p.cols <= 8; c++) {
+                if (!Solver.fits(prev, p.pattern, p.rows, p.cols, r, c)) continue;
+                if (Solver.place(prev, p.pattern, r, c) != now) continue;
+                int d = Math.abs(r - pr) + Math.abs(c - pc);
+                if (d < bestD) { bestD = d; br = r; bc = c; }
+            }
+        }
+        if (bestD != Integer.MAX_VALUE) return new int[]{br - pr, bc - pc};
+        // запасной способ: линии не сгорели — смотрим рамку новых клеток
+        if ((prev & ~now) == 0) {
+            long added = now & ~prev;
+            if (added == 0) return null;
+            int minR = 9, minC = 9;
+            for (int i = 0; i < 64; i++) {
+                if ((added & (1L << i)) != 0) {
+                    minR = Math.min(minR, i / 8);
+                    minC = Math.min(minC, i % 8);
+                }
+            }
+            return new int[]{minR - pr, minC - pc};
+        }
+        return null;
+    }
+
+    // ================= замер перетаскивания =================
+
+    private boolean strokeTo(GestureDescription.StrokeDescription[] cur, float x0, float y0, float x1, float y1,
+                             long ms, boolean cont) {
+        Path p = new Path();
+        p.moveTo(x0, y0);
+        p.lineTo(x1, y1);
+        GestureDescription.StrokeDescription s = cur[0] == null
+                ? new GestureDescription.StrokeDescription(p, 0, ms, cont)
+                : cur[0].continueStroke(p, 0, ms, cont);
+        cur[0] = s;
+        return dispatchSync(new GestureDescription.Builder().addStroke(s).build());
+    }
+
+    private Frame freshFrame(CaptureService cap, long afterSeq) {
+        long t = System.currentTimeMillis();
+        Frame f = cap.grab();
+        while (f != null && f.seq <= afterSeq && System.currentTimeMillis() - t < 400) {
+            sleep(20);
+            f = cap.grab();
+        }
+        return f;
+    }
+
+    /** Ищет поднятую фигуру ниже поля: пиксели, которые стали «блоком». Возвращает её центр. */
+    private float[] findHeld(Frame f, int[] base, int yTop, Piece p) {
+        int minX = Integer.MAX_VALUE, maxX = -1, maxY = -1, count = 0;
+        for (int y = yTop; y < f.h; y += 2) {
+            for (int x = 0; x < f.w; x += 2) {
+                int now = f.get(x, y);
+                int was = base[(y - yTop) * f.w + x];
+                if (Vision.dist(now, was) > 60 && Vision.isTrayBlock(now)) {
+                    count++;
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y > maxY) maxY = y;
+                }
+            }
+        }
+        if (count < 8) return null;
+        float w = maxX - minX + 2;
+        if (w < p.cols * cfg.cell * 0.6f || w > p.cols * cfg.cell * 1.4f) return null;
+        return new float[]{(minX + maxX + 1) / 2f, maxY + 1 - p.rows * cfg.cell / 2f};
+    }
+
+    /** Берём фигуру, двигаем палец внизу экрана и смотрим, где фигура. Потом кладём обратно. */
+    private boolean measureDrag(CaptureService cap, State st) {
+        Piece p = null;
+        for (Piece q : st.pieces) {
+            if (q == null) continue;
+            if (p == null || q.rows < p.rows || (q.rows == p.rows && q.cellCount() < p.cellCount())) p = q;
+        }
+        if (p == null) return false;
+        Frame f0 = cap.grab();
+        if (f0 == null) return false;
+        int W = f0.w, H = f0.h;
+        int yTop = (int) (cfg.y0 + 7.5f * cfg.cell) + 6;
+        if (yTop >= H - 10) return false;
+        int[] base = new int[(H - yTop) * W];
+        for (int y = yTop; y < H; y++)
+            for (int x = 0; x < W; x += 2)
+                base[(y - yTop) * W + x] = f0.get(x, y);
+
+        float f1x = W * 0.3f, f1y = H - 30;
+        float f2x = W * 0.7f, f2y = H - 30 - cfg.cell;
+        GestureDescription.StrokeDescription[] cur = {null};
+        float[] c1 = null, c2 = null;
+        try {
+            if (!strokeTo(cur, p.cx, p.cy, p.cx + 1, p.cy, 150, true)) return false;
+            if (!strokeTo(cur, p.cx + 1, p.cy, f1x, f1y, 250, true)) return false;
+            sleep(250);
+            c1 = findHeld(freshFrame(cap, cap.currentSeq()), base, yTop, p);
+            if (strokeTo(cur, f1x, f1y, f2x, f2y, 250, true)) {
+                sleep(250);
+                c2 = findHeld(freshFrame(cap, cap.currentSeq()), base, yTop, p);
+                // назад в лоток и отпустить
+                if (strokeTo(cur, f2x, f2y, p.cx, p.cy, 250, true)) {
+                    strokeTo(cur, p.cx, p.cy, p.cx + 1, p.cy, 60, false);
+                }
+            }
+        } catch (Exception e) {
+            return false;
+        }
+        if (c1 == null) return false;
+        float kx = 1f, ky = 1f;
+        if (c2 != null) {
+            kx = (c2[0] - c1[0]) / (f2x - f1x);
+            ky = (c2[1] - c1[1]) / (f2y - f1y);
+            if (kx < 0.5f || kx > 3f) kx = 1f;
+            if (ky < 0.5f || ky > 3f) ky = kx;
+        }
+        cfg.kx = kx;
+        cfg.ky = ky;
+        cfg.bx = c1[0] - kx * f1x;
+        cfg.by = c1[1] - ky * f1y;
+        status("Замер: k=" + String.format("%.2f", kx) + "/" + String.format("%.2f", ky)
+                + " сдвиг=" + Math.round(cfg.by) + "px");
+        return true;
     }
 
     // ================= жесты =================
