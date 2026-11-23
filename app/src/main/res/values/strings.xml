@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Block Blast Бот</string>
+    <string name="acc_label">Block Blast Бот</string>
+    <string name="acc_desc">Бот сам перетаскивает фигуры в Block Blast. Нужен, чтобы делать свайпы за тебя и показывать панель поверх игры.</string>
+</resources>
