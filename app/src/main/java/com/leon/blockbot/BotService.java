@@ -409,11 +409,14 @@ public class BotService extends AccessibilityService {
             Piece p = ps.get(m.idx);
             float tx = cfg.x0 + (m.c + (p.cols - 1) / 2f) * cfg.cell;
             float ty = cfg.y0 + (m.r + (p.rows - 1) / 2f) * cfg.cell;
-            float fx = (tx - cfg.bx) / cfg.kx;
-            float fy = (ty - cfg.by) / cfg.ky;
+            // фигура = старт + k * (палец - старт) + подъём
+            float fx = p.cx + (tx - p.cx - cfg.bx) / cfg.kx;
+            float fy = p.cy + (ty - p.cy - cfg.by) / cfg.ky;
 
             moves++;
             status((cfg.offKnown ? "Ход " + moves : "Пристреливаюсь…")
+                    + " · k=" + String.format("%.2f", cfg.kx) + "/" + String.format("%.2f", cfg.ky)
+                    + " подъём=" + Math.round(cfg.bx) + "/" + Math.round(cfg.by)
                     + " · " + speed() + "x"
                     + (st.uncertain > 0 ? " · неуверенных клеток: " + st.uncertain : ""));
 
@@ -524,40 +527,52 @@ public class BotService extends AccessibilityService {
             for (int x = 0; x < W; x += 2)
                 base[(y - yTop) * W + x] = f0.get(x, y);
 
-        float f1x = W * 0.3f, f1y = H - 30;
-        float f2x = W * 0.7f, f2y = H - 30 - cfg.cell;
+        float d = cfg.cell * 0.8f;
+        float fy0 = H - 70;
+        float f1x = Math.max(20, p.cx - d), f1y = fy0;
+        float f2x = Math.min(W - 20, p.cx + d), f2y = fy0;
+        float f3x = f2x, f3y = fy0 - d;
         GestureDescription.StrokeDescription[] cur = {null};
-        float[] c1 = null, c2 = null;
+        float[] c1 = null, c2 = null, c3 = null;
         try {
             if (!strokeTo(cur, p.cx, p.cy, p.cx + 1, p.cy, 150, true)) return false;
             if (!strokeTo(cur, p.cx + 1, p.cy, f1x, f1y, 250, true)) return false;
-            sleep(250);
+            sleep(280);
             c1 = findHeld(freshFrame(cap, cap.currentSeq()), base, yTop, p);
-            if (strokeTo(cur, f1x, f1y, f2x, f2y, 250, true)) {
-                sleep(250);
+            float lx = f1x, ly = f1y;
+            if (strokeTo(cur, f1x, f1y, f2x, f2y, 200, true)) {
+                lx = f2x; ly = f2y;
+                sleep(280);
                 c2 = findHeld(freshFrame(cap, cap.currentSeq()), base, yTop, p);
-                // назад в лоток и отпустить
-                if (strokeTo(cur, f2x, f2y, p.cx, p.cy, 250, true)) {
-                    strokeTo(cur, p.cx, p.cy, p.cx + 1, p.cy, 60, false);
+                if (strokeTo(cur, f2x, f2y, f3x, f3y, 200, true)) {
+                    lx = f3x; ly = f3y;
+                    sleep(280);
+                    c3 = findHeld(freshFrame(cap, cap.currentSeq()), base, yTop, p);
                 }
+            }
+            // назад в лоток и отпустить
+            if (strokeTo(cur, lx, ly, p.cx, p.cy, 250, true)) {
+                strokeTo(cur, p.cx, p.cy, p.cx + 1, p.cy, 60, false);
             }
         } catch (Exception e) {
             return false;
         }
-        if (c1 == null) return false;
         float kx = 1f, ky = 1f;
-        if (c2 != null) {
-            kx = (c2[0] - c1[0]) / (f2x - f1x);
-            ky = (c2[1] - c1[1]) / (f2y - f1y);
-            if (kx < 0.5f || kx > 3f) kx = 1f;
-            if (ky < 0.5f || ky > 3f) ky = kx;
-        }
+        if (c1 != null && c2 != null) kx = (c2[0] - c1[0]) / (f2x - f1x);
+        if (c2 != null && c3 != null) ky = (c3[1] - c2[1]) / (f3y - f2y);
+        if (kx < 0.5f || kx > 3f) kx = 1f;
+        if (ky < 0.5f || ky > 3f) ky = kx;
+        float[] c = c1 != null ? c1 : (c2 != null ? c2 : c3);
+        float fx = c1 != null ? f1x : (c2 != null ? f2x : f3x);
+        float fy = c1 != null ? f1y : (c2 != null ? f2y : f3y);
+        if (c == null) return false;
+        float liftX = c[0] - p.cx - kx * (fx - p.cx);
+        float liftY = c[1] - p.cy - ky * (fy - p.cy);
+        if (Math.abs(liftX) > cfg.cell * 6 || Math.abs(liftY) > cfg.cell * 8) return false;
         cfg.kx = kx;
         cfg.ky = ky;
-        cfg.bx = c1[0] - kx * f1x;
-        cfg.by = c1[1] - ky * f1y;
-        status("Замер: k=" + String.format("%.2f", kx) + "/" + String.format("%.2f", ky)
-                + " сдвиг=" + Math.round(cfg.by) + "px");
+        cfg.bx = liftX;
+        cfg.by = liftY;
         return true;
     }
 

@@ -36,12 +36,12 @@ final class Config {
         c.trayBottom = p.getFloat("trayBottom", 0f);
         c.trayLeft = p.getFloat("trayLeft", 0f);
         c.trayRight = p.getFloat("trayRight", 0f);
-        c.kx = p.getFloat("kx", 1f);
-        c.ky = p.getFloat("ky", 1f);
-        c.bx = p.getFloat("bx", 0f);
-        c.by = p.getFloat("by", 0f);
-        c.dragMeasured = p.getBoolean("dragMeasured2", false);
-        c.offKnown = p.getBoolean("offKnown2", false);
+        c.kx = p.getFloat("kx3", 1f);
+        c.ky = p.getFloat("ky3", 1f);
+        c.bx = p.getFloat("bx3", 0f);
+        c.by = p.getFloat("by3", 0f);
+        c.dragMeasured = p.getBoolean("dragMeasured3", false);
+        c.offKnown = p.getBoolean("offKnown3", false);
         c.trayCell = p.getFloat("trayCell", 0f);
         c.speedIdx = p.getInt("speedIdx", 0);
         c.panelX = p.getInt("panelX", 20);
@@ -54,8 +54,8 @@ final class Config {
                 .putFloat("x0", x0).putFloat("y0", y0).putFloat("cell", cell)
                 .putFloat("trayTop", trayTop).putFloat("trayBottom", trayBottom)
                 .putFloat("trayLeft", trayLeft).putFloat("trayRight", trayRight)
-                .putFloat("kx", kx).putFloat("ky", ky).putFloat("bx", bx).putFloat("by", by)
-                .putBoolean("dragMeasured2", dragMeasured).putBoolean("offKnown2", offKnown)
+                .putFloat("kx3", kx).putFloat("ky3", ky).putFloat("bx3", bx).putFloat("by3", by)
+                .putBoolean("dragMeasured3", dragMeasured).putBoolean("offKnown3", offKnown)
                 .putFloat("trayCell", trayCell)
                 .putInt("speedIdx", speedIdx)
                 .putInt("panelX", panelX).putInt("panelY", panelY)
