@@ -45,7 +45,15 @@ final class Vision {
                 minI = i;
             }
         }
-        if (minI >= 0 && minV < 150) c.emptyRef = cols[minI];
+        // цвет пустой клетки = самая большая группа похожих тёмных клеток
+        int bestCnt = 0, bestI = -1;
+        for (int i = 0; i < 64; i++) {
+            if (val(cols[i]) >= 150) continue;
+            int cnt = 0;
+            for (int j = 0; j < 64; j++) if (dist(cols[i], cols[j]) < 40) cnt++;
+            if (cnt > bestCnt) { bestCnt = cnt; bestI = i; }
+        }
+        if (bestI >= 0 && (bestCnt >= 3 || c.emptyRef == -1)) c.emptyRef = cols[bestI];
         if (c.emptyRef == -1) return null;
 
         int ref = c.emptyRef;
@@ -70,8 +78,16 @@ final class Vision {
     private static int bg;
     private static int bgV;
 
+    /** Блок фигуры: заметно отличается от фона и это не тень (тень = тот же фон, только темнее). */
     private static boolean block(int p) {
-        return dist(p, bg) > 60 && val(p) > bgV + 20;
+        if (dist(p, bg) <= 55) return false;
+        float br = r(bg), bgg = g(bg), bb = b(bg);
+        float t = (r(p) * br + g(p) * bgg + b(p) * bb) / (br * br + bgg * bgg + bb * bb + 1f);
+        if (t < 1.0f) {
+            float res = Math.abs(r(p) - t * br) + Math.abs(g(p) - t * bgg) + Math.abs(b(p) - t * bb);
+            if (res < 45) return false; // тень
+        }
+        return true;
     }
 
     /** Похож ли пиксель на блок фигуры (по фону лотка из последнего чтения). */

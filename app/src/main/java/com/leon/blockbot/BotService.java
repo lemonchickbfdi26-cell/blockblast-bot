@@ -308,6 +308,7 @@ public class BotService extends AccessibilityService {
         cfg.offKnown = false;
         cfg.save(this);
         status("Калибровка сохранена ✔ Жми ▶");
+        panel.post(() -> { updatePanelRect(); movePanelOffBoard(); });
     }
 
     // ================= бот =================
@@ -317,8 +318,27 @@ public class BotService extends AccessibilityService {
         else startBot();
     }
 
+    /** Если панель закрывает поле или лоток — переставляем её над полем. */
+    private void movePanelOffBoard() {
+        if (panel == null || !cfg.calibrated()) return;
+        int h = panel.getHeight();
+        int boardTop = (int) (cfg.y0 - cfg.cell / 2f);
+        int[] r = panelRect;
+        boolean overlaps = r[3] > boardTop - 2 && r[1] < cfg.trayBottom;
+        if (!overlaps) return;
+        int[] loc = new int[2];
+        panel.getLocationOnScreen(loc);
+        int shift = loc[1] - panelLp.y; // разница между экраном и координатами окна
+        panelLp.y = Math.max(0, boardTop - h - 6 - shift);
+        try { wm.updateViewLayout(panel, panelLp); } catch (Exception ignored) { }
+        cfg.panelY = panelLp.y;
+        cfg.save(this);
+        panel.post(this::updatePanelRect);
+    }
+
     private void startBot() {
         if (running) return;
+        movePanelOffBoard();
         running = true;
         playBtn.setText("⏸");
         worker = new Thread(this::loop, "bot");
