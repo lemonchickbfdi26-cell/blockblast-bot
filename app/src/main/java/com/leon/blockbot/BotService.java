@@ -383,6 +383,7 @@ public class BotService extends AccessibilityService {
         int pr = 0, pc = 0;
         int probeIdx = 0, misses = 0, measureFails = 0;
         boolean lastVerified = false;
+        int msc = 3, combo = 0; // ходов без очистки и длина серии комбо
         long minSeq = 0;
         int moves = 0;
 
@@ -410,6 +411,16 @@ public class BotService extends AccessibilityService {
             map.setState(st);
 
             // --- проверяем, куда встала прошлая фигура, и учимся ---
+            if (hasPending && st.board != pendingBoard) {
+                // фигура встала: были ли очищены линии?
+                if ((pendingBoard & ~st.board) != 0) {
+                    combo = (msc < 3 ? combo : 0) + 1;
+                    msc = 0;
+                } else {
+                    msc++;
+                    if (msc >= 3) combo = 0;
+                }
+            }
             if (hasPending) {
                 hasPending = false;
                 if (st.board == pendingBoard) {
@@ -459,7 +470,7 @@ public class BotService extends AccessibilityService {
                 continue;
             }
 
-            Solver.Move m = Solver.best(st.board, ps);
+            Solver.Move m = Solver.best(st.board, ps, msc, combo);
             if (m == null) {
                 status("Ходов нет 😢 (жду)");
                 sleep(1000);
@@ -474,6 +485,7 @@ public class BotService extends AccessibilityService {
 
             moves++;
             status((cfg.offKnown ? "Ход " + moves : "Пристреливаюсь…")
+                    + (combo > 1 ? " · комбо " + combo : "")
                     + " · k=" + String.format("%.2f", cfg.kx) + "/" + String.format("%.2f", cfg.ky)
                     + " подъём=" + Math.round(cfg.bx) + "/" + Math.round(cfg.by)
                     + " · " + speed() + "x"
