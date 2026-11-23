@@ -181,15 +181,33 @@ final class Vision {
         for (int[] bx : boxes) if (bx != null) list.add(bx);
         if (list.isEmpty()) return 0;
 
-        float lo, hi;
+        // в Block Blast клетка в лотке ≈ 0.44 клетки поля
+        float lo0 = c.cell * 0.37f, hi0 = c.cell * 0.53f;
         if (c.trayCell > 0) {
-            lo = c.trayCell * 0.92f;
-            hi = c.trayCell * 1.08f;
-        } else {
-            // в Block Blast клетка в лотке ≈ 0.44 клетки поля
-            lo = c.cell * 0.37f;
-            hi = c.cell * 0.53f;
+            float lo = Math.max(lo0, c.trayCell * 0.92f), hi = Math.min(hi0, c.trayCell * 1.08f);
+            if (lo < hi) {
+                float[] r = fitCell(list, lo, hi, c);
+                if (r != null && r[1] / list.size() < 0.25f) {
+                    learn(c, r, list.size(), lo0, hi0);
+                    return r[0];
+                }
+            }
+            c.trayCell = 0; // выученный размер уехал — учимся заново
         }
+        float[] r = fitCell(list, lo0, hi0, c);
+        if (r == null) return 0;
+        learn(c, r, list.size(), lo0, hi0);
+        return r[0];
+    }
+
+    private static void learn(Config c, float[] r, int n, float lo0, float hi0) {
+        if (r[1] / n >= 0.15f) return;
+        float v = c.trayCell == 0 ? r[0] : c.trayCell * 0.9f + r[0] * 0.1f;
+        c.trayCell = Math.max(lo0, Math.min(hi0, v));
+    }
+
+    /** {размер, ошибка} или null. */
+    private static float[] fitCell(List<int[]> list, float lo, float hi, Config c) {
         float stepS = Math.max(0.2f, c.cell * 0.004f);
         int nSteps = (int) ((hi - lo) / stepS) + 1;
         float[] errs = new float[nSteps];
@@ -209,22 +227,12 @@ final class Vision {
             errs[k] = err;
             if (err < bestErr) bestErr = err;
         }
-        if (bestErr == Float.MAX_VALUE) return 0;
+        if (bestErr == Float.MAX_VALUE) return null;
         // при почти равной ошибке берём больший размер клетки (меньше клеток в фигуре)
-        float bestS = 0;
         for (int k = nSteps - 1; k >= 0; k--) {
-            if (errs[k] <= bestErr + 0.05f) {
-                bestS = lo + k * stepS;
-                break;
-            }
+            if (errs[k] <= bestErr + 0.05f) return new float[]{lo + k * stepS, bestErr};
         }
-        // учимся, если уверены
-        if (c.trayCell == 0 && bestErr / list.size() < 0.15f) {
-            c.trayCell = bestS;
-        } else if (c.trayCell > 0 && bestErr / list.size() < 0.15f) {
-            c.trayCell = c.trayCell * 0.9f + bestS * 0.1f;
-        }
-        return bestS;
+        return null;
     }
 
     private static Piece buildPiece(Frame f, int[] bx, float s, int slot) {
