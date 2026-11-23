@@ -72,6 +72,10 @@ final class Solver {
         {0x603L,2,3},{0x306L,2,3},{0x20301L,3,2},{0x10302L,3,2},
         {0x201L,2,2},{0x102L,2,2},{0x40201L,3,3},{0x10204L,3,3}
     };
+    // насколько часто игра выдаёт каждую фигуру (1 = как в среднем); учится во время игры
+    static final double[] SHAPE_W = new double[SHAPES.length];
+    static { java.util.Arrays.fill(SHAPE_W, 1.0); }
+
     static double W_CLEAR = 1.0, W_FILLED = 1.0, W_HOLE = 10.0, W_TRANS = 5.0, W_FIT = 2.0, W_BIG = 12.0, W_LINE5 = 5.0, W_REGION = 0.0;
 
     private static boolean canFit(long b, long[] sh) {
@@ -115,8 +119,8 @@ final class Solver {
         if (canFit(b, H5, 1, 5)) s += W_LINE5;
         if (canFit(b, V5, 5, 1)) s += W_LINE5;
         if (W_FIT > 0) {
-            int miss = 0;
-            for (long[] sh : SHAPES) if (!canFit(b, sh)) miss++;
+            double miss = 0;
+            for (int i = 0; i < SHAPES.length; i++) if (!canFit(b, SHAPES[i])) miss += SHAPE_W[i];
             s -= miss * W_FIT;
         }
         if (W_REGION > 0) s -= smallRegions(b) * W_REGION;

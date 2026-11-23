@@ -300,6 +300,40 @@ final class Vision {
         return seen == pat;
     }
 
+    /** Экран конца игры: широкая оранжевая кнопка с белым ▶ посередине. Возвращает её центр или null. */
+    static float[] findRestartButton(Frame f) {
+        int W = f.w, H = f.h;
+        int x0a = (int) (0.25f * W), x1a = (int) (0.42f * W), x0b = (int) (0.58f * W), x1b = (int) (0.75f * W);
+        int first = -1, last = -1, run = 0, bestRun = 0, bestFirst = -1;
+        for (int y = (int) (0.45f * H); y < (int) (0.9f * H); y += 4) {
+            int tot = 0, ok = 0;
+            for (int x = x0a; x < x1a; x += 4) { tot++; if (orange(f.get(x, y))) ok++; }
+            for (int x = x0b; x < x1b; x += 4) { tot++; if (orange(f.get(x, y))) ok++; }
+            if (ok >= tot * 0.9f) {
+                if (run == 0) first = y;
+                run++;
+                last = y;
+                if (run > bestRun) { bestRun = run; bestFirst = first; }
+            } else {
+                run = 0;
+            }
+        }
+        if (bestRun * 4 < H * 0.035f) return null;
+        float cy = bestFirst + bestRun * 2f;
+        // белый треугольник посередине
+        int white = 0;
+        for (int dx = -12; dx <= 12; dx += 4) {
+            int p = f.get(W / 2 + dx, (int) cy);
+            if (r(p) > 190 && g(p) > 190 && b(p) > 190) white++;
+        }
+        if (white < 3) return null;
+        return new float[]{W / 2f, cy};
+    }
+
+    private static boolean orange(int p) {
+        return r(p) > 180 && g(p) > 110 && g(p) < 200 && b(p) < 90;
+    }
+
     static int clamp(int v, int lo, int hi) {
         return v < lo ? lo : (v > hi ? hi : v);
     }

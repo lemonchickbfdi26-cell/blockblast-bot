@@ -36,6 +36,9 @@ public class BotService extends AccessibilityService {
     private final Handler main = new Handler(Looper.getMainLooper());
     private WindowManager wm;
     private Config cfg;
+    private Learner learner;
+    private TextView learnTv;
+    private Button autoBtn;
 
     private LinearLayout panel;
     private WindowManager.LayoutParams panelLp;
@@ -52,6 +55,7 @@ public class BotService extends AccessibilityService {
         instance = this;
         wm = getSystemService(WindowManager.class);
         cfg = Config.load(this);
+        learner = Learner.load(this);
         showPanel();
     }
 
@@ -133,6 +137,22 @@ public class BotService extends AccessibilityService {
         cal.setOnClickListener(v -> startCalibration());
         row.addView(cal);
 
+        autoBtn = mkBtn(autoRestart() ? "🔁" : "⏹");
+        autoBtn.setOnClickListener(v -> {
+            boolean on = !autoRestart();
+            getSharedPreferences("cfg", MODE_PRIVATE).edit().putBoolean("autoRestart", on).apply();
+            autoBtn.setText(on ? "🔁" : "⏹");
+            status(on ? "Новая игра после проигрыша: сам нажму ▶" : "Новая игра после проигрыша: выключено");
+        });
+        autoBtn.setOnLongClickListener(v -> {
+            learner.reset();
+            learner.save(this);
+            showLearn();
+            status("Обучение сброшено");
+            return true;
+        });
+        row.addView(autoBtn);
+
         panel.addView(row);
 
         statusTv = new TextView(this);
@@ -142,6 +162,14 @@ public class BotService extends AccessibilityService {
         statusTv.setPadding(dp(2), dp(4), dp(2), dp(4));
         statusTv.setText(cfg.calibrated() ? "Готов. Жми ▶" : "Сначала калибровка: жми ⚙");
         panel.addView(statusTv);
+
+        learnTv = new TextView(this);
+        learnTv.setTextColor(0xFF9FE0A0);
+        learnTv.setTextSize(10);
+        learnTv.setMaxWidth(dp(220));
+        learnTv.setPadding(dp(2), 0, dp(2), dp(4));
+        learnTv.setText(learner.summary());
+        panel.addView(learnTv);
 
         map = new MiniMap(this);
         panel.addView(map, new LinearLayout.LayoutParams(dp(216), dp(48)));
@@ -223,6 +251,26 @@ public class BotService extends AccessibilityService {
             latch.countDown();
         });
         try { latch.await(1, TimeUnit.SECONDS); } catch (InterruptedException ignored) { }
+    }
+
+    private boolean autoRestart() {
+        return getSharedPreferences("cfg", MODE_PRIVATE).getBoolean("autoRestart", true);
+    }
+
+    private void showLearn() {
+        main.post(() -> { if (learnTv != null) learnTv.setText(learner.summary()); });
+    }
+
+    private void tap(float x, float y) {
+        panelPassThrough(true, false);
+        try {
+            Path p = new Path();
+            p.moveTo(x, y);
+            p.lineTo(x + 1, y);
+            dispatchSync(new GestureDescription.Builder()
+                    .addStroke(new GestureDescription.StrokeDescription(p, 0, 60)).build());
+        } catch (Exception ignored) { }
+        panelPassThrough(false, false);
     }
 
     private void status(String s) {
@@ -384,6 +432,9 @@ public class BotService extends AccessibilityService {
         int probeIdx = 0, misses = 0, measureFails = 0;
         boolean lastVerified = false;
         int msc = 3, combo = 0; // ходов без очистки и длина серии комбо
+        boolean gameActive = false;
+        long gameScore = 0, overSince = 0;
+        int prevCount = 0, setsSinceSave = 0;
         long minSeq = 0;
         int moves = 0;
 
@@ -401,6 +452,41 @@ public class BotService extends AccessibilityService {
                 continue;
             }
 
+            // --- конец игры? ---
+            Frame gf = cap.grab();
+            float[] btn = gf != null ? Vision.findRestartButton(gf) : null;
+            if (btn != null) {
+                hasPending = false;
+                msc = 3;
+                combo = 0;
+                prevCount = 0;
+                if (gameActive) {
+                    gameActive = false;
+                    learner.endGame(gameScore);
+                    learner.save(this);
+                    showLearn();
+                }
+                if (autoRestart()) {
+                    long now = System.currentTimeMillis();
+                    if (overSince == 0) overSince = now;
+                    if (now - overSince > 1500) {
+                        status("Игра окончена (" + gameScore + "). Начинаю новую…");
+                        tap(btn[0], btn[1]);
+                        overSince = 0;
+                        sleep(2500);
+                    } else {
+                        status("Игра окончена (" + gameScore + ")");
+                        sleep(300);
+                    }
+                } else {
+                    status("Игра окончена (" + gameScore + "). Нажми ▶ в игре");
+                    sleep(800);
+                }
+                minSeq = cap.currentSeq();
+                continue;
+            }
+            overSince = 0;
+
             State st = readStable(cap, minSeq);
             if (!running) break;
             if (st == null) {
@@ -410,12 +496,33 @@ public class BotService extends AccessibilityService {
             }
             map.setState(st);
 
+            int count = 0;
+            for (Piece q : st.pieces) if (q != null) count++;
+            if (!gameActive && count > 0) {
+                gameActive = true;
+                gameScore = 0;
+                msc = 3;
+                combo = 0;
+                learner.startGame();
+                showLearn();
+            }
+            if (count == 3 && prevCount < 3) {
+                learner.onNewSet(st.pieces);
+                if (++setsSinceSave >= 5) { setsSinceSave = 0; learner.save(this); }
+            }
+            prevCount = count;
+
             // --- проверяем, куда встала прошлая фигура, и учимся ---
             if (hasPending && st.board != pendingBoard) {
                 // фигура встала: были ли очищены линии?
+                int cells = pendingPiece.cellCount();
+                gameScore += cells;
                 if ((pendingBoard & ~st.board) != 0) {
                     combo = (msc < 3 ? combo : 0) + 1;
                     msc = 0;
+                    int removed = Long.bitCount(pendingBoard) + cells - Long.bitCount(st.board);
+                    int lines = Math.max(1, Math.round(removed / 8f));
+                    gameScore += 10L * lines * (lines + 1) / 2 + 10L * lines * combo;
                 } else {
                     msc++;
                     if (msc >= 3) combo = 0;
@@ -484,7 +591,7 @@ public class BotService extends AccessibilityService {
             float fy = p.cy + (ty - p.cy - cfg.by) / cfg.ky;
 
             moves++;
-            status((cfg.offKnown ? "Ход " + moves : "Пристреливаюсь…")
+            status((cfg.offKnown ? "Ход " + moves + " · счёт " + gameScore : "Пристреливаюсь…")
                     + (combo > 1 ? " · комбо " + combo : "")
                     + " · k=" + String.format("%.2f", cfg.kx) + "/" + String.format("%.2f", cfg.ky)
                     + " подъём=" + Math.round(cfg.bx) + "/" + Math.round(cfg.by)
